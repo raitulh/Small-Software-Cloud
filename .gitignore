@@ -16,3 +16,4 @@ htmlcov/
 backups/*.sql.gz
 *.sqlite
 *.sqlite3
+*.tsbuildinfo

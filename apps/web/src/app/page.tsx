@@ -49,8 +49,25 @@ function timeAgo(date?: string) {
 const initial = (email: string) => email.slice(0, 1).toUpperCase();
 
 export default function HomePage() {
-  const [token, setToken] = useState("");
-  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return window.sessionStorage.getItem("ssc_access_token") || "";
+    }
+    return "";
+  });
+  const [user, setUser] = useState<User | null>(() => {
+    if (typeof window !== "undefined") {
+      const savedUser = window.sessionStorage.getItem("ssc_user");
+      if (savedUser) {
+        try {
+          return JSON.parse(savedUser) as User;
+        } catch {
+          window.sessionStorage.clear();
+        }
+      }
+    }
+    return null;
+  });
   const [authMode, setAuthMode] = useState<"login" | "register">("register");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -132,20 +149,17 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const savedToken = window.sessionStorage.getItem("ssc_access_token");
-    const savedUser = window.sessionStorage.getItem("ssc_user");
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      try { setUser(JSON.parse(savedUser) as User); } catch { window.sessionStorage.clear(); }
-    }
-  }, []);
-
-  useEffect(() => {
     if (!token || !user) return;
     let cancelled = false;
-    loadDashboard(token, activeOrgId).catch((e: Error) => {
-      if (!cancelled) setError(e.message);
-    });
+    void (async () => {
+      try {
+        await loadDashboard(token, activeOrgId);
+      } catch (e: unknown) {
+        if (!cancelled && e instanceof Error) {
+          setError(e.message);
+        }
+      }
+    })();
     return () => { cancelled = true; };
   }, [token, user, activeOrgId, loadDashboard]);
 
