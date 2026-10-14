@@ -1,0 +1,105 @@
+name: small-software-cloud
+services:
+  traefik:
+    image: traefik:v3.2
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./infra/traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro"
+    networks:
+      - control
+      - smallcloud_apps
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smallcloud
+      POSTGRES_USER: cloud
+      POSTGRES_PASSWORD: cloud_dev_only
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloud -d smallcloud"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [control]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes: ["redisdata:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [control]
+
+  api:
+    build: ./apps/api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cloud:cloud_dev_only@db:5432/smallcloud
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: http://localhost:3000
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [control]
+
+  worker:
+    build: ./apps/api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cloud:cloud_dev_only@db:5432/smallcloud
+      REDIS_URL: redis://redis:6379/0
+    command: ["arq", "app.worker.WorkerSettings"]
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    depends_on:
+      api: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    networks:
+      - control
+      - smallcloud_apps
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    networks: [control]
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  control:
+    driver: bridge
+  smallcloud_apps:
+    driver: bridge
+    name: smallcloud_apps
